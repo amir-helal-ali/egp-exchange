@@ -48,7 +48,7 @@ impl Default for BinanceConfig {
     fn default() -> Self {
         Self {
             ws_base: "wss://stream.binance.com:9443/ws".into(),
-            symbols: vec!["btcegp".into()],
+            symbols: vec!["btcusdt".into()],
             circuit_breaker_timeout: Duration::from_secs(30),
         }
     }
@@ -64,11 +64,8 @@ pub async fn start_price_feed(
     let tx_clone = tx.clone();
 
     tokio::spawn(async move {
-        let stream_name = format!(
-            "{}@depth20@100ms/{}@ticker",
-            config.symbols[0], config.symbols[0]
-        );
-        let url = format!("{}/{}", config.ws_base, stream_name);
+        // Use raw WebSocket for individual streams, then subscribe separately
+        let url = format!("{}/{}@ticker", config.ws_base, config.symbols[0]);
         let mut last_message = Instant::now();
 
         loop {
@@ -87,17 +84,24 @@ pub async fn start_price_feed(
                         match msg {
                             Ok(Message::Text(text)) => {
                                 last_message = Instant::now();
+                                tracing::debug!("Binance WS received: {} bytes", text.len());
                                 if let Ok(value) = serde_json::from_str::<Value>(&text) {
                                     process_message(&state_clone, &tx_clone, &value).await;
                                 }
                             }
                             Ok(Message::Ping(_)) => {}
                             Ok(Message::Pong(_)) => {}
+                            Ok(Message::Close(frame)) => {
+                                tracing::warn!("Binance WS closed: {:?}", frame);
+                                break;
+                            }
                             Err(e) => {
                                 tracing::warn!("Binance WS error: {e}");
                                 break;
                             }
-                            _ => {}
+                            _ => {
+                                tracing::debug!("Binance WS unknown message type");
+                            }
                         }
                     }
                 }
@@ -127,10 +131,12 @@ pub async fn start_price_feed(
 }
 
 async fn process_message(state: &PriceFeedState, tx: &broadcast::Sender<PriceFeed>, value: &Value) {
-    if let Some(_e) = value.get("e").and_then(|v| v.as_str()) {
+    if let Some(event_type) = value.get("e").and_then(|v| v.as_str()) {
         if let Some(last) = value.get("c").and_then(|v| v.as_str()) {
+            let last_dec = Decimal::from_str_exact(last).ok();
+            tracing::debug!("Ticker: e={}, c={}, parsed={:?}", event_type, last, last_dec);
             let mut feed = state.write().await;
-            feed.last = Decimal::from_str_exact(last).ok();
+            feed.last = last_dec;
             feed.bid = value
                 .get("b")
                 .and_then(|v| v.as_str())
@@ -142,6 +148,8 @@ async fn process_message(state: &PriceFeedState, tx: &broadcast::Sender<PriceFee
             let snapshot = feed.clone();
             let _ = tx.send(snapshot);
             return;
+        } else {
+            tracing::debug!("Ticker event {} but no 'c' field", event_type);
         }
     }
 

@@ -173,6 +173,33 @@ async fn place_order(
             trade.quantity,
         )
         .await;
+
+        // Update maker order (counterparty) filled quantity
+        let maker_order_id = if trade.taker_side == "buy" {
+            trade.sell_order_id
+        } else {
+            trade.buy_order_id
+        };
+        let maker_user_id = if trade.taker_side == "buy" {
+            trade.sell_user_id
+        } else {
+            trade.buy_user_id
+        };
+        if let Ok(maker_order) = db::orders::find_by_id(&state.pool, maker_order_id).await {
+            if let Some(mo) = maker_order {
+                let new_filled = mo.filled + trade.quantity;
+                let maker_status = if new_filled >= mo.quantity { "filled" } else { "partial" };
+                let _ = db::orders::update_filled(&state.pool, maker_order_id, new_filled, maker_status).await;
+                let _ = state.ws_pubsub.publish_json(&format!("orders:{}", maker_user_id), &serde_json::json!({
+                    "channel": format!("orders:{}", maker_user_id),
+                    "data": serde_json::json!({
+                        "id": maker_order_id,
+                        "filled": new_filled,
+                        "status": maker_status,
+                    }),
+                })).await;
+            }
+        }
     }
 
     let filled_qty = trades.iter().map(|t| t.quantity).sum::<rust_decimal::Decimal>();

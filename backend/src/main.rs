@@ -94,7 +94,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         tracing::info!("Admin user created: {admin_email}");
     }
 
-    // Background futures liquidation check
+    // Background futures liquidation + mark price update + TP/SL check
     let liq_state = state.clone();
     tokio::spawn(async move {
         let mut interval = tokio::time::interval(std::time::Duration::from_secs(5));
@@ -104,6 +104,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 let price = liq_state.price_feed.read().await.last;
                 if let Some(mark_price) = price {
                     for pos in &positions {
+                        // Update mark price and unrealized PnL
+                        let pnl = futures::FuturesEngine::calculate_pnl(
+                            pos.entry_price, mark_price, pos.quantity, &pos.side,
+                        );
+                        let _ = db::futures::update_price(&liq_state.pool, pos.id, mark_price, pnl).await;
+
                         if let Some(c) = futures::FuturesEngine::check_liquidation(
                             &liq_state.pool, pos, mark_price,
                         ).await {

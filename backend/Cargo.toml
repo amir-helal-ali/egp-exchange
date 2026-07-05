@@ -16,7 +16,7 @@ rust_decimal = { version = "1", features = ["serde", "db-tokio-postgres"] }
 tower-http = { version = "0.5", features = ["cors", "trace"] }
 argon2 = "0.5"
 jsonwebtoken = "9"
-tokio-tungstenite = { version = "0.21", default-features = false, features = ["connect", "rustls"] }
+tokio-tungstenite = { version = "0.21", default-features = false, features = ["connect", "rustls-tls-webpki-roots"] }
 futures-util = "0.3"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }

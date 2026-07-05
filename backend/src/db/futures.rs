@@ -52,6 +52,7 @@ pub async fn partial_close(
             UPDATE futures_positions
             SET quantity = quantity - $2,
                 realized_pnl = realized_pnl + $3,
+                margin = margin * (quantity - $2) / quantity,
                 updated_at = NOW()
             WHERE id = $1 AND status = 'open' AND quantity > $2
             RETURNING *
