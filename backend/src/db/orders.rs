@@ -65,6 +65,7 @@ pub async fn find_by_id(pool: &PgPool, id: Uuid) -> Result<Option<Order>, sqlx::
         .await
 }
 
+#[allow(dead_code)]
 pub async fn find_open_orders(
     pool: &PgPool,
     base: &str,

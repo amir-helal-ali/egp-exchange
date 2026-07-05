@@ -23,6 +23,7 @@ pub async fn create(
     .await
 }
 
+#[allow(dead_code)]
 pub async fn find_pending(pool: &PgPool) -> Result<Vec<ManualTransaction>, sqlx::Error> {
     sqlx::query_as::<_, ManualTransaction>(
         "SELECT * FROM manual_transactions WHERE status = 'pending' ORDER BY created_at ASC",

@@ -86,6 +86,7 @@ pub mod offers {
         .await
     }
 
+    #[allow(dead_code)]
     pub async fn find_by_user(pool: &PgPool, user_id: Uuid) -> Result<Vec<P2pOffer>, sqlx::Error> {
         sqlx::query_as::<_, P2pOffer>(
             "SELECT * FROM p2p_offers WHERE user_id = $1 ORDER BY created_at DESC",
@@ -95,6 +96,7 @@ pub mod offers {
         .await
     }
 
+    #[allow(dead_code)]
     pub async fn list_all(pool: &PgPool) -> Result<Vec<P2pOffer>, sqlx::Error> {
         sqlx::query_as::<_, P2pOffer>("SELECT * FROM p2p_offers ORDER BY created_at DESC")
             .fetch_all(pool)

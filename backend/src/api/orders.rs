@@ -8,7 +8,7 @@ use uuid::Uuid;
 
 use crate::{
     AppState, db, errors::ApiError, middleware::auth::require_auth,
-    models::{Order, OrderbookLevel, OrderbookSnapshot, PlaceOrderRequest, Trade},
+    models::{Order, OrderbookLevel, OrderbookSnapshot, PlaceOrderRequest},
     engine::orderbook::Order as EngineOrder,
 };
 

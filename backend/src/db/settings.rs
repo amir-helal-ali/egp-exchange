@@ -1,10 +1,10 @@
-use rust_decimal::Decimal;
 use serde_json::Value;
 use sqlx::PgPool;
 use uuid::Uuid;
 
 use crate::models::{Currency, SystemSetting, TradingPair};
 
+#[allow(dead_code)]
 pub async fn get_setting(pool: &PgPool, key: &str) -> Result<Option<Value>, sqlx::Error> {
     let row: Option<(Value,)> = sqlx::query_as("SELECT value FROM system_settings WHERE key = $1")
         .bind(key)

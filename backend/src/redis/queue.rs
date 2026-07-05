@@ -116,6 +116,7 @@ async fn remove_item(
     Ok(())
 }
 
+#[allow(dead_code)]
 pub async fn get_queue_position(
     redis: &mut ConnectionManager,
     tx_id: Uuid,

@@ -67,6 +67,7 @@ pub async fn partial_close(
     .await
 }
 
+#[allow(dead_code)]
 pub async fn find_by_tp_sl_triggered(
     pool: &PgPool,
     mark_price: Decimal,

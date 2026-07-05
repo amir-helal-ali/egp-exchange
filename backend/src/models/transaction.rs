@@ -17,6 +17,7 @@ pub struct ManualTransaction {
     pub updated_at: DateTime<Utc>,
 }
 
+#[allow(dead_code)]
 #[derive(Debug, Serialize)]
 pub struct TransactionStatus {
     pub id: Uuid,

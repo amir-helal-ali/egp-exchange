@@ -73,6 +73,15 @@ impl P2pEngine {
             return Err(crate::errors::ApiError::BadRequest("Invalid order status".into()));
         }
 
+        let offer = crate::db::p2p::offers::find_by_id(pool, order.offer_id)
+            .await?
+            .ok_or_else(|| crate::errors::ApiError::NotFound("Offer not found".into()))?;
+
+        // Lock buyer's fiat currency
+        let _ = crate::db::wallets::lock_balance(pool, user_id, &offer.fiat_currency, order.total)
+            .await
+            .map_err(|_| crate::errors::ApiError::BadRequest("Insufficient fiat balance".into()))?;
+
         crate::db::p2p::orders::update_status(pool, order_id, "paid").await
             .map_err(crate::errors::ApiError::from)
     }
@@ -93,13 +102,21 @@ impl P2pEngine {
             return Err(crate::errors::ApiError::BadRequest("Buyer has not confirmed payment yet".into()));
         }
 
-        // Credit buyer's wallet
         let offer = crate::db::p2p::offers::find_by_id(pool, order.offer_id)
             .await?
             .ok_or_else(|| crate::errors::ApiError::NotFound("Offer not found".into()))?;
 
+        // Credit buyer's wallet with crypto
         let _ = crate::db::wallets::ensure_wallet(pool, order.buyer_id, &offer.currency).await;
         let _ = crate::db::wallets::add_balance(pool, order.buyer_id, &offer.currency, order.amount).await;
+
+        // Unlock seller's crypto (release escrow)
+        let _ = crate::db::wallets::unlock_balance(pool, order.seller_id, &offer.currency, order.amount).await;
+
+        // Transfer fiat from buyer to seller: deduct buyer's locked fiat, add to seller
+        let _ = crate::db::wallets::settle_lock(pool, order.buyer_id, &offer.fiat_currency, order.total).await;
+        let _ = crate::db::wallets::ensure_wallet(pool, order.seller_id, &offer.fiat_currency).await;
+        let _ = crate::db::wallets::add_balance(pool, order.seller_id, &offer.fiat_currency, order.total).await;
 
         crate::db::p2p::orders::update_status(pool, order_id, "completed").await
             .map_err(crate::errors::ApiError::from)
@@ -131,21 +148,30 @@ impl P2pEngine {
             .await?
             .ok_or_else(|| crate::errors::ApiError::NotFound("Order not found".into()))?;
 
-        let new_status = match resolve_to {
-            "release" => "completed",
-            "refund" => "cancelled",
+        let offer = crate::db::p2p::offers::find_by_id(pool, order.offer_id)
+            .await?
+            .ok_or_else(|| crate::errors::ApiError::NotFound("Offer not found".into()))?;
+
+        match resolve_to {
+            "release" => {
+                // Admin rules in favor of buyer: complete the trade
+                let _ = crate::db::wallets::ensure_wallet(pool, order.buyer_id, &offer.currency).await;
+                let _ = crate::db::wallets::add_balance(pool, order.buyer_id, &offer.currency, order.amount).await;
+                let _ = crate::db::wallets::unlock_balance(pool, order.seller_id, &offer.currency, order.amount).await;
+                let _ = crate::db::wallets::settle_lock(pool, order.buyer_id, &offer.fiat_currency, order.total).await;
+                let _ = crate::db::wallets::ensure_wallet(pool, order.seller_id, &offer.fiat_currency).await;
+                let _ = crate::db::wallets::add_balance(pool, order.seller_id, &offer.fiat_currency, order.total).await;
+                crate::db::p2p::orders::update_status(pool, order_id, "completed").await
+                    .map_err(crate::errors::ApiError::from)
+            }
+            "refund" => {
+                // Admin rules in favor of seller: cancel and refund both sides
+                let _ = crate::db::wallets::unlock_balance(pool, order.seller_id, &offer.currency, order.amount).await;
+                let _ = crate::db::wallets::unlock_balance(pool, order.buyer_id, &offer.fiat_currency, order.total).await;
+                crate::db::p2p::orders::update_status(pool, order_id, "cancelled").await
+                    .map_err(crate::errors::ApiError::from)
+            }
             _ => return Err(crate::errors::ApiError::BadRequest("Invalid resolution".into())),
-        };
-
-        if resolve_to == "release" {
-            let offer = crate::db::p2p::offers::find_by_id(pool, order.offer_id)
-                .await?
-                .ok_or_else(|| crate::errors::ApiError::NotFound("Offer not found".into()))?;
-            let _ = crate::db::wallets::ensure_wallet(pool, order.buyer_id, &offer.currency).await;
-            let _ = crate::db::wallets::add_balance(pool, order.buyer_id, &offer.currency, order.amount).await;
         }
-
-        crate::db::p2p::orders::update_status(pool, order_id, new_status).await
-            .map_err(crate::errors::ApiError::from)
     }
 }
