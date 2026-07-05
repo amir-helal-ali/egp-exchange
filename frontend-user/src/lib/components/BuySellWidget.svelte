@@ -1,118 +1,146 @@
 <script lang="ts">
- import { api } from '$lib/api';
- import { wallets } from '$lib/stores/exchange';
- import type { Order } from '$lib/api';
+  import { api, type Order, type PlaceOrderRequest } from '$lib/api';
+  import { wallets } from '$lib/stores/exchange';
 
- export let base = 'BTC';
- export let quote = 'EGP';
+  export let base = 'BTC';
+  export let quote = 'EGP';
 
- let side = 'buy';
- let orderType = 'limit';
- let price = '';
- let quantity = '';
- let error = '';
- let success = '';
- let submitting = false;
+  let side = 'buy';
+  let orderType: 'limit' | 'market' | 'stop-limit' = 'limit';
+  let price = '';
+  let stopPrice = '';
+  let quantity = '';
+  let error = '';
+  let success = '';
+  let submitting = false;
 
- $: egpWallet = $wallets.find(w => w.currency === quote);
- $: baseWallet = $wallets.find(w => w.currency === base);
- $: balanceDisplay = side === 'buy' ? egpWallet?.balance ?? '0' : baseWallet?.balance ?? '0';
+  $: quoteWallet = $wallets.find(w => w.currency === quote);
+  $: baseWallet = $wallets.find(w => w.currency === base);
+  $: balanceDisplay = side === 'buy' ? quoteWallet?.balance ?? '0' : baseWallet?.balance ?? '0';
+  $: totalDisplay = price && quantity ? (parseFloat(price) * parseFloat(quantity)).toFixed(2) : '—';
 
- async function handleSubmit() {
-   submitting = true;
-   error = '';
-   success = '';
-   try {
-     const body: Record<string, unknown> = {
-       side,
-       order_type: orderType,
-       base_currency: base,
-       quote_currency: quote,
-       quantity: parseFloat(quantity),
-     };
-     if (orderType === 'limit') body.price = parseFloat(price);
+  async function handleSubmit() {
+    submitting = true;
+    error = '';
+    success = '';
+    try {
+      const body: PlaceOrderRequest = {
+        side,
+        order_type: orderType,
+        base_currency: base,
+        quote_currency: quote,
+        quantity: parseFloat(quantity),
+      };
+      if (orderType === 'limit' || orderType === 'stop-limit') body.price = parseFloat(price);
+      if (orderType === 'stop-limit') body.stop_price = parseFloat(stopPrice);
+      await api.post<Order>('/orders', body);
+      success = side === 'buy' ? '✅ تم تقديم أمر الشراء بنجاح' : '✅ تم تقديم أمر البيع بنجاح';
+      quantity = '';
+      price = '';
+      stopPrice = '';
+    } catch (e: unknown) {
+      error = e instanceof Error ? e.message : 'فشل الأمر';
+    } finally {
+      submitting = false;
+    }
+  }
 
-     await api.post<Order>('/orders', body);
-     success = `${side.toUpperCase()} order placed successfully`;
-     quantity = '';
-     price = '';
-   } catch (e: unknown) {
-     error = e instanceof Error ? e.message : 'Order failed';
-   } finally {
-     submitting = false;
-   }
- }
+  function setPct(pct: number) {
+    const bal = parseFloat(balanceDisplay);
+    if (side === 'buy' && (orderType === 'limit' || orderType === 'stop-limit') && price) {
+      quantity = ((bal * pct) / parseFloat(price)).toFixed(8);
+    } else {
+      quantity = (bal * pct).toFixed(8);
+    }
+  }
 
- function setMax() {
-   if (side === 'buy' && orderType === 'limit' && price) {
-     quantity = (parseFloat(balanceDisplay) / parseFloat(price)).toFixed(8);
-   } else {
-     quantity = balanceDisplay;
-   }
- }
-
- $: pct25 = side === 'buy' && orderType === 'limit' && price
-   ? ((parseFloat(balanceDisplay) * 0.25) / parseFloat(price)).toFixed(8)
-   : (parseFloat(balanceDisplay) * 0.25).toFixed(8);
- $: pct50 = side === 'buy' && orderType === 'limit' && price
-   ? ((parseFloat(balanceDisplay) * 0.5) / parseFloat(price)).toFixed(8)
-   : (parseFloat(balanceDisplay) * 0.5).toFixed(8);
- $: pct75 = side === 'buy' && orderType === 'limit' && price
-   ? ((parseFloat(balanceDisplay) * 0.75) / parseFloat(price)).toFixed(8)
-   : (parseFloat(balanceDisplay) * 0.75).toFixed(8);
+  function setMax() { setPct(1); }
 </script>
 
 <div class="card">
-  <div class="flex mb-4">
-    <button class="flex-1 py-2 text-sm font-medium rounded-l-lg" class:bg-accent-green:text-white={side === 'buy'} class:bg-dark-700:text-gray-400={side !== 'buy'} on:click={() => side = 'buy'}>
-      Buy
-    </button>
-    <button class="flex-1 py-2 text-sm font-medium rounded-r-lg" class:bg-accent-red:text-white={side === 'sell'} class:bg-dark-700:text-gray-400={side !== 'sell'} on:click={() => side = 'sell'}>
-      Sell
-    </button>
+  <div class="flex rounded-lg overflow-hidden mb-4">
+    <button
+      class="flex-1 py-2.5 text-sm font-medium transition-all duration-200"
+      class:bg-emerald-600:text-white={side === 'buy'}
+      class:bg-dark-700:text-gray-400={side !== 'buy'}
+      on:click={() => side = 'buy'}
+    >شراء</button>
+    <button
+      class="flex-1 py-2.5 text-sm font-medium transition-all duration-200"
+      class:bg-red-600:text-white={side === 'sell'}
+      class:bg-dark-700:text-gray-400={side !== 'sell'}
+      on:click={() => side = 'sell'}
+    >بيع</button>
   </div>
 
   <form on:submit|preventDefault={handleSubmit} class="space-y-3">
-    <div class="flex gap-2">
-      <button class="flex-1 py-1.5 text-xs rounded" class:bg-blue-600:text-white={orderType === 'limit'} class:bg-dark-700:text-gray-400={orderType !== 'limit'} on:click={() => orderType = 'limit'}>Limit</button>
-      <button class="flex-1 py-1.5 text-xs rounded" class:bg-blue-600:text-white={orderType === 'market'} class:bg-dark-700:text-gray-400={orderType !== 'market'} on:click={() => orderType = 'market'}>Market</button>
+    <div class="flex gap-1">
+      <button type="button"
+        class="flex-1 py-1.5 text-xs rounded transition-all duration-200"
+        class:bg-amber-600:text-white={orderType === 'limit'}
+        class:bg-dark-700:text-gray-400={orderType !== 'limit'}
+        on:click={() => orderType = 'limit'}
+      >محدد</button>
+      <button type="button"
+        class="flex-1 py-1.5 text-xs rounded transition-all duration-200"
+        class:bg-amber-600:text-white={orderType === 'market'}
+        class:bg-dark-700:text-gray-400={orderType !== 'market'}
+        on:click={() => orderType = 'market'}
+      >سوقي</button>
+      <button type="button"
+        class="flex-1 py-1.5 text-xs rounded transition-all duration-200"
+        class:bg-amber-600:text-white={orderType === 'stop-limit'}
+        class:bg-dark-700:text-gray-400={orderType !== 'stop-limit'}
+        on:click={() => orderType = 'stop-limit'}
+      >إيقاف</button>
     </div>
 
-    {#if orderType === 'limit'}
+    {#if orderType === 'limit' || orderType === 'stop-limit'}
       <div>
-        <label class="label">Price ({quote})</label>
+        <label class="label">السعر ({quote})</label>
         <input type="number" step="0.01" class="input" bind:value={price} required />
       </div>
     {/if}
 
+    {#if orderType === 'stop-limit'}
+      <div>
+        <label class="label">سعر الإيقاف ({quote})</label>
+        <input type="number" step="0.01" class="input" bind:value={stopPrice} required placeholder="مثلاً 52000" />
+      </div>
+    {/if}
+
     <div>
-      <label class="label">Quantity ({base})</label>
+      <div class="flex justify-between items-center">
+        <label class="label">الكمية ({base})</label>
+        <span class="text-xs text-gray-500">الرصيد: {parseFloat(balanceDisplay).toFixed(8)}</span>
+      </div>
       <input type="number" step="0.00000001" class="input" bind:value={quantity} required />
     </div>
 
+    {#if price && quantity && orderType !== 'market'}
+      <div class="flex justify-between text-xs text-gray-400">
+        <span>الإجمالي</span>
+        <span>{totalDisplay} {quote}</span>
+      </div>
+    {/if}
+
     <div class="flex gap-1">
-      <button type="button" class="flex-1 py-1 text-xs btn-ghost" on:click={() => quantity = pct25}>25%</button>
-      <button type="button" class="flex-1 py-1 text-xs btn-ghost" on:click={() => quantity = pct50}>50%</button>
-      <button type="button" class="flex-1 py-1 text-xs btn-ghost" on:click={() => quantity = pct75}>75%</button>
-      <button type="button" class="flex-1 py-1 text-xs btn-ghost" on:click={setMax}>Max</button>
+      <button type="button" class="flex-1 py-1 text-xs btn-ghost rounded" on:click={() => setPct(0.25)}>25%</button>
+      <button type="button" class="flex-1 py-1 text-xs btn-ghost rounded" on:click={() => setPct(0.5)}>50%</button>
+      <button type="button" class="flex-1 py-1 text-xs btn-ghost rounded" on:click={() => setPct(0.75)}>75%</button>
+      <button type="button" class="flex-1 py-1 text-xs btn-ghost rounded" on:click={setMax}>100%</button>
     </div>
 
-    <div class="text-xs text-gray-400">
-      Available: {parseFloat(balanceDisplay).toFixed(8)} {side === 'buy' ? quote : base}
-    </div>
+    {#if error}<div class="bg-red-900/50 border border-red-700 text-red-300 rounded-lg p-2.5 text-xs">{error}</div>{/if}
+    {#if success}<div class="bg-emerald-900/50 border border-emerald-700 text-emerald-300 rounded-lg p-2.5 text-xs">{success}</div>{/if}
 
-    {#if error}
-      <div class="bg-red-900/50 border border-red-700 text-red-300 rounded-lg p-2 text-xs">{error}</div>
-    {/if}
-    {#if success}
-      <div class="bg-green-900/50 border border-green-700 text-green-300 rounded-lg p-2 text-xs">{success}</div>
-    {/if}
-
-    <button type="submit" class="w-full py-2.5 text-sm font-medium rounded-lg text-white"
-      class:bg-accent-green:hover:bg-green-700={side === 'buy'}
-      class:bg-accent-red:hover:bg-red-700={side === 'sell'}
+    <button type="submit"
+      class="w-full py-2.5 text-sm font-medium rounded-lg text-white transition-all duration-200"
+      class:btn-buy={side === 'buy'}
+      class:btn-sell={side === 'sell'}
+      class:opacity-50:cursor-not-allowed={submitting}
       disabled={submitting}>
-      {submitting ? 'Processing...' : `${side === 'buy' ? 'Buy' : 'Sell'} ${base}`}
+      {submitting ? 'جاري التنفيذ...' : side === 'buy' ? `شراء ${base}` : `بيع ${base}`}
     </button>
   </form>
 </div>

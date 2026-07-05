@@ -15,6 +15,9 @@ pub struct Order {
     pub quantity: Decimal,
     pub filled: Decimal,
     pub status: String,
+    pub stop_price: Option<Decimal>,
+    pub reduce_only: bool,
+    pub time_in_force: String,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
 }
@@ -27,6 +30,9 @@ pub struct PlaceOrderRequest {
     pub quote_currency: String,
     pub price: Option<Decimal>,
     pub quantity: Decimal,
+    pub stop_price: Option<Decimal>,
+    pub reduce_only: Option<bool>,
+    pub time_in_force: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

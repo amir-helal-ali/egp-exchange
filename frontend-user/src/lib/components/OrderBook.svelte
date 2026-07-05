@@ -1,85 +1,114 @@
 <script lang="ts">
- import { onMount, onDestroy } from 'svelte';
- import { orderbook } from '$lib/stores/exchange';
- import { api } from '$lib/api';
- import type { OrderbookSnapshot } from '$lib/api';
+  import { onMount, onDestroy } from 'svelte';
+  import { orderbook, lastPrice } from '$lib/stores/exchange';
+  import { getWs } from '$lib/ws';
+  import type { OrderbookSnapshot } from '$lib/api';
 
- export let base = 'BTC';
- export let quote = 'EGP';
+  export let base = 'BTC';
+  export let quote = 'EGP';
 
- let polling: ReturnType<typeof setInterval>;
+  let channel = `orderbook:${base}${quote}`;
 
- onMount(() => {
-   fetchOrderbook();
-   polling = setInterval(fetchOrderbook, 1000);
- });
+  onMount(() => {
+    const ws = getWs();
+    ws.subscribe(channel, handleOrderbook);
+    ws.connect();
+  });
 
- onDestroy(() => {
-   if (polling) clearInterval(polling);
- });
+  onDestroy(() => {
+    const ws = getWs();
+    ws.unsubscribe(channel, handleOrderbook);
+  });
 
- async function fetchOrderbook() {
-   try {
-     const ob = await api.get<OrderbookSnapshot>(`/orderbook/${base}/${quote}`);
-     orderbook.set(ob);
-   } catch {}
- }
+  function handleOrderbook(data: unknown) {
+    const ob = data as OrderbookSnapshot;
+    orderbook.set(ob);
+    if (ob.last_price) lastPrice.set(ob.last_price);
+  }
 
- function formatPrice(s: string) {
-   return parseFloat(s).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
- }
+  $: asks = ($orderbook?.asks?.slice(0, 15).reverse() ?? []).map(a => ({
+    ...a,
+    priceNum: parseFloat(a.price),
+    qtyNum: parseFloat(a.quantity),
+    total: parseFloat(a.price) * parseFloat(a.quantity),
+  }));
+  $: bids = ($orderbook?.bids?.slice(0, 15) ?? []).map(b => ({
+    ...b,
+    priceNum: parseFloat(b.price),
+    qtyNum: parseFloat(b.quantity),
+    total: parseFloat(b.price) * parseFloat(b.quantity),
+  }));
 
- function formatQty(s: string) {
-   return parseFloat(s).toLocaleString(undefined, { minimumFractionDigits: 4, maximumFractionDigits: 8 });
- }
+  $: maxAskQty = Math.max(...asks.map(a => a.qtyNum), 0.001);
+  $: maxBidQty = Math.max(...bids.map(b => b.qtyNum), 0.001);
+  $: bestAsk = asks.length > 0 ? asks[asks.length - 1]?.priceNum : 0;
+  $: bestBid = bids.length > 0 ? bids[0]?.priceNum : 0;
+  $: spread = bestAsk && bestBid ? bestAsk - bestBid : 0;
+  $: spreadPct = bestAsk && bestBid && bestAsk !== 0 ? (spread / bestAsk) * 100 : 0;
 
- $: asks = $orderbook?.asks?.slice(0, 10).reverse() ?? [];
- $: bids = $orderbook?.bids?.slice(0, 10) ?? [];
- $: lastPrice = $orderbook?.last_price;
+  function fmtPrice(v: number) {
+    return v.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  }
 
- $: maxAskQty = Math.max(...asks.map(a => parseFloat(a.quantity)), 0.001);
- $: maxBidQty = Math.max(...bids.map(b => parseFloat(b.quantity)), 0.001);
+  function fmtQty(v: number) {
+    return v.toLocaleString('en-US', { minimumFractionDigits: 4, maximumFractionDigits: 4 });
+  }
+
+  function fmtTotal(v: number) {
+    return v.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  }
+
+  $: bidTotal = bids.reduce((s, b) => s + b.total, 0);
+  $: askTotal = asks.reduce((s, a) => s + a.total, 0);
 </script>
 
-<div class="card">
+<div class="card h-full flex flex-col">
   <div class="flex items-center justify-between mb-3">
-    <h3 class="text-sm font-semibold text-gray-300">Order Book</h3>
+    <h3 class="text-sm font-semibold text-gray-300">دفتر الأوامر</h3>
     <span class="text-xs text-gray-500">{base}/{quote}</span>
   </div>
 
   <div class="grid grid-cols-3 text-xs text-gray-500 mb-1 pb-1 border-b border-dark-600">
-    <span>Price ({quote})</span>
-    <span class="text-right">Qty ({base})</span>
-    <span class="text-right">Total</span>
+    <span>السعر ({quote})</span>
+    <span class="text-left">الكمية ({base})</span>
+    <span class="text-left">الإجمالي</span>
   </div>
 
-  <div class="space-y-0.5">
-    {#each asks as ask}
-      <div class="grid grid-cols-3 text-xs relative">
-        <div class="absolute right-0 top-0 h-full bg-red-900/20" style="width: {(parseFloat(ask.quantity) / maxAskQty) * 100}%"></div>
-        <span class="text-accent-red z-10">{formatPrice(ask.price)}</span>
-        <span class="text-right z-10">{formatQty(ask.quantity)}</span>
-        <span class="text-right text-gray-500 z-10">{(parseFloat(ask.price) * parseFloat(ask.quantity)).toFixed(2)}</span>
-      </div>
-    {/each}
+  <div class="flex-1 min-h-0 overflow-y-auto">
+    <div class="space-y-0.5">
+      {#each asks as ask}
+        <div class="grid grid-cols-3 text-xs relative py-0.5">
+          <div class="depth-bar left-0 bg-red-900/20 rounded" style="width: {(ask.qtyNum / maxAskQty) * 100}%"></div>
+          <span class="text-red-400 z-10">{fmtPrice(ask.priceNum)}</span>
+          <span class="text-left text-gray-300 z-10">{fmtQty(ask.qtyNum)}</span>
+          <span class="text-left text-gray-500 z-10">{fmtTotal(ask.total)}</span>
+        </div>
+      {/each}
+    </div>
+
+    <div class="flex items-center justify-between py-2 my-1 border-y border-dark-600 text-center">
+      <span class="text-xs text-gray-500">السبريد: {fmtPrice(spread)} ({spreadPct.toFixed(2)}%)</span>
+      {#if $lastPrice}
+        <span class="text-base font-bold text-gray-100">{fmtPrice(parseFloat($lastPrice))}</span>
+      {:else}
+        <span class="text-gray-500">---</span>
+      {/if}
+    </div>
+
+    <div class="space-y-0.5">
+      {#each bids as bid}
+        <div class="grid grid-cols-3 text-xs relative py-0.5">
+          <div class="depth-bar left-0 bg-emerald-900/20 rounded" style="width: {(bid.qtyNum / maxBidQty) * 100}%"></div>
+          <span class="text-emerald-400 z-10">{fmtPrice(bid.priceNum)}</span>
+          <span class="text-left text-gray-300 z-10">{fmtQty(bid.qtyNum)}</span>
+          <span class="text-left text-gray-500 z-10">{fmtTotal(bid.total)}</span>
+        </div>
+      {/each}
+    </div>
   </div>
 
-  <div class="text-center py-2 my-1 border-y border-dark-600">
-    {#if lastPrice}
-      <span class="text-lg font-bold">{formatPrice(lastPrice)}</span>
-    {:else}
-      <span class="text-gray-500">---</span>
-    {/if}
-  </div>
-
-  <div class="space-y-0.5">
-    {#each bids as bid}
-      <div class="grid grid-cols-3 text-xs relative">
-        <div class="absolute right-0 top-0 h-full bg-green-900/20" style="width: {(parseFloat(bid.quantity) / maxBidQty) * 100}%"></div>
-        <span class="text-accent-green z-10">{formatPrice(bid.price)}</span>
-        <span class="text-right z-10">{formatQty(bid.quantity)}</span>
-        <span class="text-right text-gray-500 z-10">{(parseFloat(bid.price) * parseFloat(bid.quantity)).toFixed(2)}</span>
-      </div>
-    {/each}
+  <div class="grid grid-cols-2 gap-4 mt-2 pt-2 border-t border-dark-600 text-xs text-gray-400">
+    <div class="text-right">الطلب: <span class="text-emerald-400">{fmtTotal(bidTotal)}</span></div>
+    <div class="text-left">العرض: <span class="text-red-400">{fmtTotal(askTotal)}</span></div>
   </div>
 </div>

@@ -1,6 +1,7 @@
 use std::collections::BTreeMap;
 use rust_decimal::Decimal;
 use serde::Serialize;
+use uuid::Uuid;
 
 #[derive(Debug, Clone)]
 pub struct Order {
@@ -26,10 +27,17 @@ pub struct TradeEvent {
     pub taker_side: String,
 }
 
+#[derive(Debug, Clone)]
+pub struct LimitOrder {
+    pub id: Uuid,
+    pub user_id: Uuid,
+    pub quantity: Decimal,
+}
+
 #[derive(Debug, Default)]
 pub struct OrderBook {
-    pub bids: BTreeMap<Decimal, Decimal>,
-    pub asks: BTreeMap<Decimal, Decimal>,
+    pub bids: BTreeMap<Decimal, Vec<LimitOrder>>,
+    pub asks: BTreeMap<Decimal, Vec<LimitOrder>>,
 }
 
 impl OrderBook {
@@ -40,37 +48,65 @@ impl OrderBook {
         }
     }
 
-    pub fn add_bid(&mut self, price: Decimal, quantity: Decimal) {
-        *self.bids.entry(price).or_insert(Decimal::ZERO) += quantity;
+    pub fn add_bid(&mut self, price: Decimal, order: LimitOrder) {
+        self.bids.entry(price).or_default().push(order);
     }
 
-    pub fn add_ask(&mut self, price: Decimal, quantity: Decimal) {
-        *self.asks.entry(price).or_insert(Decimal::ZERO) += quantity;
+    pub fn add_ask(&mut self, price: Decimal, order: LimitOrder) {
+        self.asks.entry(price).or_default().push(order);
     }
 
-    pub fn remove_bid(&mut self, price: &Decimal, quantity: Decimal) {
-        if let Some(entry) = self.bids.get_mut(price) {
-            *entry -= quantity;
-            if *entry <= Decimal::ZERO {
+    pub fn remove_bid(&mut self, price: &Decimal, quantity: Decimal) -> Vec<LimitOrder> {
+        if let Some(orders) = self.bids.get_mut(price) {
+            let mut remaining = quantity;
+            let mut taken = Vec::new();
+            while remaining > Decimal::ZERO && !orders.is_empty() {
+                let mut front = orders.remove(0);
+                let take = front.quantity.min(remaining);
+                remaining -= take;
+                if front.quantity > take {
+                    orders.insert(0, LimitOrder { quantity: front.quantity - take, ..front });
+                    front.quantity = take;
+                }
+                taken.push(front);
+            }
+            if orders.is_empty() {
                 self.bids.remove(price);
             }
+            taken
+        } else {
+            vec![]
         }
     }
 
-    pub fn remove_ask(&mut self, price: &Decimal, quantity: Decimal) {
-        if let Some(entry) = self.asks.get_mut(price) {
-            *entry -= quantity;
-            if *entry <= Decimal::ZERO {
+    pub fn remove_ask(&mut self, price: &Decimal, quantity: Decimal) -> Vec<LimitOrder> {
+        if let Some(orders) = self.asks.get_mut(price) {
+            let mut remaining = quantity;
+            let mut taken = Vec::new();
+            while remaining > Decimal::ZERO && !orders.is_empty() {
+                let mut front = orders.remove(0);
+                let take = front.quantity.min(remaining);
+                remaining -= take;
+                if front.quantity > take {
+                    orders.insert(0, LimitOrder { quantity: front.quantity - take, ..front });
+                    front.quantity = take;
+                }
+                taken.push(front);
+            }
+            if orders.is_empty() {
                 self.asks.remove(price);
             }
+            taken
+        } else {
+            vec![]
         }
     }
 
-    pub fn best_bid(&self) -> Option<(&Decimal, &Decimal)> {
+    pub fn best_bid(&self) -> Option<(&Decimal, &Vec<LimitOrder>)> {
         self.bids.iter().next_back()
     }
 
-    pub fn best_ask(&self) -> Option<(&Decimal, &Decimal)> {
+    pub fn best_ask(&self) -> Option<(&Decimal, &Vec<LimitOrder>)> {
         self.asks.iter().next()
     }
 
@@ -80,9 +116,9 @@ impl OrderBook {
             .iter()
             .rev()
             .take(depth)
-            .map(|(p, q)| Level {
+            .map(|(p, orders)| Level {
                 price: *p,
-                quantity: *q,
+                quantity: orders.iter().map(|o| o.quantity).sum(),
             })
             .collect();
 
@@ -90,9 +126,9 @@ impl OrderBook {
             .asks
             .iter()
             .take(depth)
-            .map(|(p, q)| Level {
+            .map(|(p, orders)| Level {
                 price: *p,
-                quantity: *q,
+                quantity: orders.iter().map(|o| o.quantity).sum(),
             })
             .collect();
 

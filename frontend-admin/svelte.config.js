@@ -5,6 +5,6 @@ export default {
   preprocess: vitePreprocess(),
   kit: {
     adapter: adapter(),
-    csrf: { checkOrigin: false }
+    csrf: { trustedOrigins: ['http://localhost:3000', 'http://localhost:5173', 'http://localhost:5174'] }
   }
 };

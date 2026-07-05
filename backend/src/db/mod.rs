@@ -4,6 +4,9 @@ pub mod trades;
 pub mod users;
 pub mod wallets;
 pub mod manual_transactions;
+pub mod futures;
+pub mod p2p;
+pub mod settings;
 
 use sqlx::PgPool;
 

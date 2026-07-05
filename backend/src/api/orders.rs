@@ -1,23 +1,29 @@
 use std::sync::Arc;
 
 use axum::{
-    Json, Router, extract::{Path, State, Extension}, middleware, routing::{get, post, delete},
+    Json, Router, extract::{Path, State, Extension}, middleware,
+    routing::{get, post, delete},
 };
 use uuid::Uuid;
 
 use crate::{
     AppState, db, errors::ApiError, middleware::auth::require_auth,
-    models::{Order, OrderbookLevel, OrderbookSnapshot, PlaceOrderRequest},
+    models::{Order, OrderbookLevel, OrderbookSnapshot, PlaceOrderRequest, Trade},
     engine::orderbook::Order as EngineOrder,
 };
 
 pub fn routes() -> Router<Arc<AppState>> {
     Router::new()
+        .route("/orderbook/:base/:quote", get(orderbook))
+        .route("/trades/:base/:quote", get(recent_trades))
+        .merge(authenticated_routes())
+}
+
+fn authenticated_routes() -> Router<Arc<AppState>> {
+    Router::new()
         .route("/orders", post(place_order))
         .route("/orders", get(list_orders))
-        .route("/orders/{id}", delete(cancel_order))
-        .route("/orderbook/{base}/{quote}", get(orderbook))
-        .route("/trades/{base}/{quote}", get(recent_trades))
+        .route("/orders/:id", delete(cancel_order))
         .route_layer(middleware::from_fn(require_auth))
 }
 
@@ -29,15 +35,42 @@ async fn place_order(
     if req.quantity <= rust_decimal::Decimal::ZERO {
         return Err(ApiError::BadRequest("Quantity must be positive".into()));
     }
-    if req.order_type == "limit" && req.price.is_none() {
-        return Err(ApiError::BadRequest("Price required for limit orders".into()));
-    }
 
+    let order_type = req.order_type.to_lowercase();
     let base_currency = req.base_currency.to_uppercase();
     let quote_currency = req.quote_currency.to_uppercase();
+    let time_in_force = req.time_in_force.as_deref().unwrap_or("GTC").to_uppercase();
+    let reduce_only = req.reduce_only.unwrap_or(false);
 
+    match order_type.as_str() {
+        "limit" if req.price.is_none() => {
+            return Err(ApiError::BadRequest("Price required for limit orders".into()));
+        }
+        "stop-limit" if req.stop_price.is_none() => {
+            return Err(ApiError::BadRequest("Stop price required for stop-limit orders".into()));
+        }
+        "stop-limit" if req.price.is_none() => {
+            return Err(ApiError::BadRequest("Limit price required for stop-limit orders".into()));
+        }
+        _ => {}
+    }
+
+    // Calculate lock amount
+    let pair_key = (base_currency.clone(), quote_currency.clone());
     let (lock_currency, lock_amount) = match req.side.as_str() {
-        "buy" => (quote_currency.clone(), req.price.unwrap_or_default() * req.quantity),
+        "buy" => {
+            if order_type == "market" {
+                let engines = state.engines.lock().await;
+                let est_price = engines.get(&pair_key)
+                    .and_then(|e| e.orderbook.best_ask())
+                    .map(|(p, _)| *p)
+                    .unwrap_or(rust_decimal::Decimal::ONE);
+                drop(engines);
+                (quote_currency.clone(), est_price * req.quantity)
+            } else {
+                (quote_currency.clone(), req.price.unwrap_or_default() * req.quantity)
+            }
+        }
         "sell" => (base_currency.clone(), req.quantity),
         _ => return Err(ApiError::BadRequest("Invalid side".into())),
     };
@@ -50,30 +83,43 @@ async fn place_order(
         &state.pool,
         user_id,
         &req.side,
-        &req.order_type,
+        &order_type,
         &base_currency,
         &quote_currency,
         req.price,
         req.quantity,
+        req.stop_price,
+        reduce_only,
+        &time_in_force,
     )
     .await?;
+
+    // Notify user of new order
+    let _ = state.ws_pubsub.publish_json(&format!("orders:{}", user_id), &serde_json::json!({
+        "channel": format!("orders:{}", user_id),
+        "data": &order,
+    })).await;
+
+    // Stop-limit orders are not placed on orderbook until triggered
+    if order_type == "stop-limit" {
+        return Ok(Json(order));
+    }
 
     let engine_order = EngineOrder {
         id: order.id,
         user_id,
         side: req.side.clone(),
-        price: req.price,
+        price: if order_type == "market" { None } else { req.price },
         quantity: req.quantity,
         filled: rust_decimal::Decimal::ZERO,
     };
 
-    let pair_key = (base_currency.clone(), quote_currency.clone());
     let mut engines = state.engines.lock().await;
     let engine = engines
         .entry(pair_key)
         .or_insert_with(|| crate::engine::MatchingEngine::new(base_currency.clone(), quote_currency.clone()));
 
-    let (trades, _result) = match req.order_type.as_str() {
+    let (trades, _result) = match order_type.as_str() {
         "market" => engine.process_market(&engine_order),
         _ => engine.process_limit(&engine_order),
     };
@@ -140,10 +186,40 @@ async fn place_order(
 
     let updated = db::orders::update_filled(&state.pool, order.id, filled_qty, new_status).await?;
 
+    // Publish trades
+    if !trades.is_empty() {
+        let trade_channel = format!("trades:{}{}", base_currency, quote_currency);
+        let trade_data: Vec<serde_json::Value> = trades.iter().map(|t| {
+            serde_json::json!({
+                "price": t.price,
+                "quantity": t.quantity,
+                "total": t.total,
+                "base_currency": t.base_currency,
+                "quote_currency": t.quote_currency,
+                "taker_side": t.taker_side,
+                "created_at": chrono::Utc::now(),
+            })
+        }).collect();
+        let _ = state.ws_pubsub.publish_json(&trade_channel, &serde_json::json!({
+            "channel": trade_channel,
+            "data": trade_data,
+        })).await;
+    }
+
+    // Publish updated order
+    let _ = state.ws_pubsub.publish_json(&format!("orders:{}", user_id), &serde_json::json!({
+        "channel": format!("orders:{}", user_id),
+        "data": &updated,
+    })).await;
+
     if filled_qty < req.quantity {
         let unlock_qty = match req.side.as_str() {
             "buy" => {
-                let unit_price = req.price.unwrap_or(rust_decimal::Decimal::ZERO);
+                let unit_price = if order_type == "market" {
+                    trades.first().map(|t| t.price).unwrap_or(rust_decimal::Decimal::ZERO)
+                } else {
+                    req.price.unwrap_or(rust_decimal::Decimal::ZERO)
+                };
                 unit_price * (req.quantity - filled_qty)
             }
             "sell" => req.quantity - filled_qty,
@@ -210,7 +286,13 @@ async fn cancel_order(
         }
     }
 
-    Ok(Json(serde_json::json!({ "status": "cancelled", "id": order.id })))
+    // Publish cancelled order
+    let _ = state.ws_pubsub.publish_json(&format!("orders:{}", user_id), &serde_json::json!({
+        "channel": format!("orders:{}", user_id),
+        "data": &order,
+    })).await;
+
+    Ok(Json(serde_json::json!({"status": "cancelled", "id": order.id })))
 }
 
 async fn orderbook(

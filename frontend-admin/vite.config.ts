@@ -3,5 +3,5 @@ import { defineConfig } from 'vite';
 
 export default defineConfig({
   plugins: [sveltekit()],
-  server: { port: 5174, proxy: { '/api': 'http://backend:3000' } }
+  server: { port: 3007, proxy: { '/api': 'http://localhost:3005', '/ws': { target: 'ws://localhost:3005', ws: true } } }
 });
