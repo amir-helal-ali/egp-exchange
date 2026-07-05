@@ -1,0 +1,23 @@
+# Rust
+backend/target/
+
+# Node
+frontend-user/node_modules/
+frontend-user/build/
+frontend-user/.svelte-kit/
+frontend-user/.env
+
+frontend-admin/node_modules/
+frontend-admin/build/
+frontend-admin/.svelte-kit/
+frontend-admin/.env
+
+# Docker
+*.log
+
+# IDE
+.vscode/
+.idea/
+
+# Env
+.env

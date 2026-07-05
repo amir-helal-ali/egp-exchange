@@ -1,0 +1,97 @@
+name: egp-exchange
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-egp}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-egp_pass}
+      POSTGRES_DB: ${POSTGRES_DB:-egp_exchange}
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-egp} -d ${POSTGRES_DB:-egp_exchange}"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    networks:
+      - egp-network
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    volumes:
+      - redisdata:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+    networks:
+      - egp-network
+
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    ports:
+      - "3000:3000"
+    environment:
+      DATABASE_URL: ${DATABASE_URL:-postgres://egp:egp_pass@postgres:5432/egp_exchange}
+      REDIS_URL: ${REDIS_URL:-redis://redis:6379}
+      JWT_SECRET: ${JWT_SECRET:-super-secret-key-change-me-in-production}
+      SERVER_HOST: 0.0.0.0
+      SERVER_PORT: 3000
+      BINANCE_WS_URL: ${BINANCE_WS_URL:-wss://stream.binance.com:9443/ws}
+      ADMIN_EMAIL: ${ADMIN_EMAIL:-admin@egp.exchange}
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD:-admin123}
+      RUST_LOG: ${RUST_LOG:-info}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - egp-network
+    restart: unless-stopped
+
+  frontend-user:
+    build:
+      context: ./frontend-user
+      dockerfile: Dockerfile
+    ports:
+      - "5173:3000"
+    environment:
+      NODE_ENV: production
+      ORIGIN: http://localhost:5173
+    depends_on:
+      - backend
+    networks:
+      - egp-network
+    restart: unless-stopped
+
+  frontend-admin:
+    build:
+      context: ./frontend-admin
+      dockerfile: Dockerfile
+    ports:
+      - "5174:3000"
+    environment:
+      NODE_ENV: production
+      ORIGIN: http://localhost:5174
+    depends_on:
+      - backend
+    networks:
+      - egp-network
+    restart: unless-stopped
+
+volumes:
+  pgdata:
+  redisdata:
+
+networks:
+  egp-network:
+    driver: bridge
